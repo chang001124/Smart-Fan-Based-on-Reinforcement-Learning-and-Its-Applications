@@ -1,113 +1,178 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
-#include "DHT.h"
-#include "WiFiEsp.h"
+#include "ESP8266.h"
+#include <ArduinoJson.h>
 #define ONE_WIRE_BUS 5 // 1-Wire 總線接口引腳
 #define fan_pin 8 // 電風扇 PWM 引腳
-#define DHTPIN 9 
-#define DHTTYPE DHT11
 #define A 21
-#define S 151
+#define S 81
 #define ALPHA 0.1 // Q-learning 學習率
 #define GAMMA 0.9 // Q-learning 折扣因子
-#define episode 1000
-DHT dht(DHTPIN, DHTTYPE);
-WiFiEspServer server(80);
-RingBuffer buf(8);
-char ssid[] = "chang1124";            // your network SSID (name)
-char pass[] = "0973365084";        // your network password
+#define episode 3000
+#define SSID        "lolsfd"
+#define PASSWORD    "0975820030"
+#define HOST_NAME   "172.20.10.5"
+#define HOST_PORT   (80)
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+const int button_cold = 2;
+const int button_hot = 3;
 const int ledPin = 13;
-int repeatCount = 0;
+const char* username;
+int repeatCount = 3;
+int fan_speed = 128;
+int a_table[S];
 float temperature = 0.0;
-int fan_speed = 128;// 電風扇 PWM 引腳
-int status = WL_IDLE_STATUS;
 float upper = -1.0;
 float lower = -1.0; 
 float goal = 0.0;
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature sensors(&oneWire);
-//int q_table[S][A];
-int a_table[S];
 float rt=23;//室溫
-int cnt = 0;
+ESP8266 wifi(Serial3);
+
+
 void setup() {
-  Serial.begin(115200);
-  Serial3.begin(115200);
-  WiFi.init(&Serial3);    // initialize ESP module
+  Serial.begin(9600);
   sensors.begin();
-  dht.begin();  //初始化DHT
+  pinMode(button_cold,INPUT); 
+  pinMode(button_hot,INPUT);
   pinMode(fan_pin,OUTPUT);
   pinMode(ledPin, OUTPUT);
-  int count=150;
-  for(int i=0;i<76;i++){
+  int count=80;
+  for(int i=0;i<41;i++){
     a_table[i]=count;
     count-=2;
   }
-  for(int i=76;i<S;i++){
+  for(int i=41;i<S;i++){
     a_table[i]=count;
     count-=2;
   }
+    Serial.print(F("setup begin\r\n"));
+
+    Serial.print(F("FW Version:"));
+    Serial.println(wifi.getVersion().c_str());
+
+    if (wifi.setOprToStationSoftAP()) {
+        Serial.print(F("to station + softap ok\r\n"));
+    } else {
+        Serial.print(F("to station + softap err\r\n"));
+    }
+
+    if (wifi.joinAP(SSID, PASSWORD)) {
+        Serial.print(F("Join AP success\r\n"));
+
+        Serial.print(F("IP:"));
+        Serial.println(wifi.getLocalIP().c_str());       
+    } else {
+        Serial.print(F("Join AP failure\r\n"));
+    }
+    
+    if (wifi.disableMUX()) {
+        Serial.print(F("single ok\r\n"));
+    } else {
+        Serial.print(F("single err\r\n"));
+    }
+    
+    Serial.print(F("setup end\r\n"));
   //show_table();
-  // check for the presence of the shield
-  if (WiFi.status() == WL_NO_SHIELD) {
-    Serial.println("WiFi shield not present");
-    // don't continue
-    while (true);
+}
+//----------------------------------------------------
+void get_username(){     //get user name char* username
+  uint8_t buffer[100] = {0};
+
+    if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
+        Serial.print(F("create tcp ok\r\n"));
+    } else {
+        Serial.print(F("create tcp err\r\n"));
+    }
+    char *hello =("GET /smart_fan/get_username.php\r\n");//   HTTP/1.1\r\n Host: 172.20.10.5\r\n Connection: close\r\n
+    wifi.send((const uint8_t*)hello, strlen(hello));
+    uint32_t len = wifi.recv(buffer, sizeof(buffer), 10000);
+    /*if (len > 0) {
+        //Serial.print(F("Received:["));
+        for(uint32_t i = 0; i < len; i++) {  
+            //username[i] = (char)buffer[i];
+            //Serial.print(username[i]);
+            Serial.print(buffer[i]);
+        }
+        //Serial.print(F("]\r\n"));
+    }*/
+    //DynamicJsonDocument doc(500);
+    StaticJsonDocument<100> doc;
+    DeserializationError error = deserializeJson(doc,buffer);
+    username = doc[0][0];
+//    Serial.print(username);
+    
+    /*if (wifi.releaseTCP()) {
+        Serial.print(F("release tcp ok\r\n"));
+    } else {
+        Serial.print(F("release tcp err\r\n"));
+    }*/
+    doc.clear();
+}
+void getdata(int test_array[S][A], char* use){
+    uint8_t buffer[1024] = {0};
+    //Serial.print(F("get data\r\n"));
+    
+    int num_rows=0;
+    for(int count=1;count<=27;count++){
+      if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
+          Serial.print(F("create tcp ok\r\n"));
+      } else {
+          Serial.print(F("create tcp err\r\n"));
+      }
+      char *hello =("GET /smart_fan/gettable.php?count=a");//   HTTP/1.1\r\n Host: 172.20.10.5\r\n Connection: close\r\n
+      String c = String(count);//username=who
+      char *tail2 = ("&username=");
+      char *tail = "\r\n";
+      String all = hello+c+tail2+use+tail;
+      const char *url_complete = all.c_str();
+      wifi.send((const uint8_t*)url_complete, strlen(url_complete));
+      uint32_t len = wifi.recv(buffer, sizeof(buffer), 10000);
+    
+      /*if (len > 0) {
+          Serial.println(len);
+          Serial.print("Received:[");
+          for(int i = 0; i < len; i++) {
+              Serial.print(buffer[i]);
+          }
+          Serial.print("]\r\n");
+      }*/
+      
+      // 解析JSON字串
+      DynamicJsonDocument doc(1024);
+      //StaticJsonDocument<1000> doc;
+      DeserializationError error = deserializeJson(doc,buffer);
+
+      int num=0;
+      for(int j=num_rows;j<num_rows+3;j++){
+        for(int k=0;k<A;k++){
+          const char* data1 = doc[0][0];
+          data1=doc[num][0];
+          int l = atoi(data1); 
+          //Serial.println("Num"+String(num));
+          num++;
+          //Serial.println(l);
+          test_array[j][k]=l;
+
+        }
+      }
+      
+      num_rows+=3;
+    delay(100);
+      doc.clear();
+  
+  
+      
   }
-
-  // attempt to connect to WiFi network
-  while (status != WL_CONNECTED) {
-    Serial.print("Attempting to connect to WPA SSID: ");
-    Serial.println(ssid);
-    // Connect to WPA/WPA2 network
-    status = WiFi.begin(ssid, pass);
-  }
-
-  Serial.println("You're connected to the network");
-  printWifiStatus();
-  // start the web server on port 80
-  server.begin();
-}
-void sendHttpResponse(WiFiEspClient client)
-{
-  // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
-  // and a content-type so the client knows what's coming, then a blank line:
-  client.println("HTTP/1.1 200 OK");
-  client.println("Content-type:text/html");
-  client.println();
-  
-  // the content of the HTTP response follows the header:
-  //client.print("Welcome To Smart Fan");
-  client.print("Smart Fan");
-  
-  client.println("<br>");
-  client.println("<br>");
-  
-  client.println("Click<button> <a href=\"/H\">cold</a> </button>feel cold<br>");
-  client.println("Click<button> <a href=\"/L\">hot</a> </button>feel hot<br>");
-  
-  // The HTTP response ends with another blank line:
-  client.println();
+  /*if (wifi.releaseTCP()) {
+          Serial.print(F("release tcp ok\r\n"));
+      } else {
+          Serial.print(F("release tcp err\r\n"));
+      }*/
 }
 
-void printWifiStatus()
-{
-  // print the SSID of the network you're attached to
-  Serial.print("SSID: ");
-  Serial.println(WiFi.SSID());
-
-  // print your WiFi shield's IP address
-  IPAddress ip = WiFi.localIP();
-  Serial.print("IP Address: ");
-  Serial.println(ip);
-
-  // print where to go in the browser
-  Serial.println();
-  Serial.print("To see this page in action, open a browser to http://");
-  Serial.println(ip);
-  Serial.println();
-}
-void set_table(int number,int a,int q_table[][A]){//
+//-----------------------------------------------------------------------------------
+void set_table(int number,int a,int q_table[][A]){// fanspeed index
   int i;
   if(a%2!=0)
     a+=1;
@@ -119,13 +184,74 @@ void set_table(int number,int a,int q_table[][A]){//
   //Serial.println(i);
   if(number>0){
     for(int j=number/10+10;j<A;j++)
-      q_table[i][j]+=100;
+      q_table[i][j]+=10;
   }
   else{
     for(int j=6;j>=0;j--)
-      q_table[i][j]+=100;
+      q_table[i][j]+=10;
   }
 }
+//---------------------------------------------------------------------------
+void update_table(int test_array[S][A],char* use){
+  int num_rows = 0;
+  uint8_t buffer[1024] = {0};    
+    // 將二維陣列編碼為JSON格式
+    for(int count=1;count<=27;count++){
+      //StaticJsonDocument json_doc(1024);
+      StaticJsonDocument<1000> json_doc;
+      JsonArray json_rows = json_doc.to<JsonArray>();
+      for (int i = num_rows; i < num_rows+3; i++) {
+        JsonArray json_cols = json_rows.createNestedArray();
+        for (int j = 0; j < 21; j++) {
+          json_cols.add(test_array[i][j]);
+        }
+      }
+      num_rows += 3;
+      if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
+          Serial.print(F("create tcp ok\r\n"));
+      } else {
+          Serial.print(F("create tcp err\r\n"));
+      }
+      String json_string;
+      serializeJson(json_rows,json_string);
+      int len = json_string.length();
+
+   
+      String l = String(len);
+      String C=String(count);
+
+      char *head = ("GET /smart_fan/update_table.php?array1=");
+      char *mid0=("&count=a");
+      char *mid1 = ("\r\nContent-Type: application/json\r\nContent-Length:");
+      char *mid2 = ("&username=");
+      char *mid = ("\r\n");
+      char *tail = ("\r\n\r\n");
+      //String all = head +l+ mid + json_string + tail;
+      String all = head + json_string + mid0 + C +mid2+use+ mid1 + l + tail;
+      const char *url_complete = all.c_str();
+      //char *url_complete =("GET /table1.php?id=51&name=1550\r\n");
+      //char *url_complete =("GET /table1.php?id=51&name=1550\r\n");
+      //Serial.println(url_complete);
+      wifi.send((const uint8_t*)url_complete, strlen(url_complete));
+      /*uint32_t leng = wifi.recv(buffer, sizeof(buffer), 100000);
+      if (leng > 0) {
+          Serial.print(F("Received:["));
+          for(uint32_t i = 0; i < leng; i++) {
+              Serial.print((char)buffer[i]);
+          }
+          Serial.print(F("]\r\n"));
+      }*/
+      delay(150);
+      json_doc.clear();
+  }
+  /*if (wifi.releaseTCP()) {
+          Serial.print(F("release tcp ok\r\n"));
+      } else {
+          Serial.print(F("release tcp err\r\n"));
+      }*/
+      
+}
+//------------------------------------------------------------------------
 int find_max_value(int row,int q_table[S][A]){          
     int Max = -1;
     for(int i=0;i<A;i++){
@@ -133,7 +259,6 @@ int find_max_value(int row,int q_table[S][A]){
         Max = q_table[row][i];
       }
     }
-
     return Max;  
 }
 int find_max_action(int row,int q_table[S][A]){
@@ -159,25 +284,44 @@ int find_max_action(int row,int q_table[S][A]){
     
     return action; 
 }
+void clear_all(int arr[]){
+  int i;
+  for(i=0;i<A;i++){
+    arr[i] = -1;
+  }
+}
 int find_max_idx(int row,int q_table[S][A]){
-    int Max = -1,i,idx;
+    int Max = q_table[row][0],i,idx,max_action[A],k=0;
+    clear_all(max_action);
+    //clear_all(max_action);
     for(i=0;i<A;i++){
       if(q_table[row][i]>Max){
+        k=0;
+        clear_all(max_action);
+        max_action[k++] = i;
         Max = q_table[row][i];
-        idx=i;
+        //idx=i;
+      }
+      else if(q_table[row][i]==Max){
+        max_action[k++] = i;
       }
     }
-    if(Max == 0){
-        idx = random(0,20);
-    }
     
+    if(k>0){
+      k--;
+    }
+   //Serial.println("K:"+String(k));
+    idx = max_action[random(0,k)];
+    //Serial.println("")
     return idx; 
 }
 bool is_good(float before,float after){
-    if(abs(before - goal)>abs(after - goal)){
+    float a,b;
+    a = before - goal;
+    b = after - goal;
+    if(a>=b){
       return true;
     }
-    
     return false;
 }
 int check_index(float temperature,float goat){
@@ -200,66 +344,106 @@ void show_table(int q_table[S][A]){
     Serial.println();
   }
 }
+void send_chart(float goat,int fan_speed){
+    if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
+          Serial.print(F("create tcp ok\r\n"));
+      } else {
+          Serial.print(F("create tcp err\r\n"));
+      }
+     String l = String(goat);
+     String C=String(fan_speed);
+    char *hello =("GET /smart_fan/charts.php?temp=");//   HTTP/1.1\r\n Host: 172.20.10.5\r\n Connection: close\r\n
+    char *a=("&fan_speed=");
+    char *cc=("\r\n");
+    String all =hello+l+a+C+cc;
+    const char *url_complete = all.c_str();
+    wifi.send((const uint8_t*)url_complete, strlen(url_complete));
+    //uint32_t len = wifi.recv(buffer, sizeof(buffer), 10000);
+    /*if (len > 0) {
+        //Serial.print(F("Received:["));
+        for(uint32_t i = 0; i < len; i++) {  
+            //username[i] = (char)buffer[i];
+            //Serial.print(username[i]);
+            Serial.print(buffer[i]);
+        }
+        //Serial.print(F("]\r\n"));
+    }*/
+    
+    /*if (wifi.releaseTCP()) {
+        Serial.print(F("release tcp ok\r\n"));
+    } else {
+        Serial.print(F("release tcp err\r\n"));
+    }*/
+}
+
 void loop() {
-  rt = dht.readTemperature();  //取得溫度C
+  get_username();
+  char* use = (char*)username;
+  char target[20]; 
+  float feel[2],cold=0,hot=0;
+  strcpy(target, use);
+  Serial.println(use);
+  sensors.requestTemperatures();//偵測溫度
+  Serial.println(sensors.getTempCByIndex(0));
+  rt=sensors.getTempCByIndex(0);
   Serial.println(String("rt=")+rt);
-  int q_table[S][A],set_temp[6],flag=0;
-  for(int i=0;i<S;i++){
-    for(int j=0;j<A;j++){
-      q_table[i][j]=0;
-    }
-  }
+  int q_table[S][A],set_temp[6],cnt=0;
+  getdata(q_table,target);
+  show_table(q_table);
   for(int i=0;i<6;i++)
     set_temp[i]=0;
   //show_table(q_table);
   analogWrite(fan_pin,fan_speed);
   //model 1 START
-  int count=0;
-  while(repeatCount!=3){
-    flag=0;
-    WiFiEspClient client = server.available();  // listen for incoming clients
-    if (client) {                               // if you get a client,
-      Serial.println("New client");             // print a message out the serial port
-      buf.init();                               // initialize the circular buffer
-      while (client.connected()) {              // loop while the client's connected
-        if (client.available()) {               // if there's bytes to read from the client,
-          char c = client.read();               // read a byte, then
-          buf.push(c);                          // push it to the ring buffer
-          if (buf.endsWith("\r\n\r\n")) {
-            sendHttpResponse(client);
-            break;
-          }
-          
-          // Check to see if the client request was "GET /H" or "GET /L":
-          if (buf.endsWith("GET /H")) {
-            fan_speed -= 40;
-            set_temp[count++]=-40;
-            lower = fan_speed;
-            flag=1;
-            digitalWrite(13, HIGH);   // turn the LED on (HIGH is the voltage level)
-          }
-          else if (buf.endsWith("GET /L")) {
-            fan_speed += 40;
-            set_temp[count++]=40;
-            upper = fan_speed;
-            flag=1;
-            digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW
-          }
-        }
+    int count=0;
+    for (int i = 0; i < repeatCount; i++) {               
+    //Serial.println(String("fan_speed:")+fan_speed);
+//    Serial.print("5");
+//    delay(1000);
+//    Serial.print("4");
+//    delay(1000);
+//    Serial.print("3");
+//    delay(1000);
+    Serial.print("2");
+    delay(1000);
+    Serial.println("1");
+    delay(1000);
+    digitalWrite(ledPin, HIGH);
+    while(true){                                      //1->hot 0->cold
+        if (digitalRead(button_cold) == 0) {
+        Serial.println(F("button_cold Pressed"));
+        fan_speed -= 40;
+        set_temp[count]=-40;
+        lower = fan_speed;
+        break;
+      } else if (digitalRead(button_hot) == 0) {
+        Serial.println(F("button_hot Pressed"));
+        fan_speed += 40;
+        set_temp[count]=40;
+        upper = fan_speed;
+        break;
       }
-      if(flag==1){
-        sensors.requestTemperatures();//偵測溫度
-        set_temp[count++]=round(((sensors.getTempCByIndex(0)-rt)*10));
-        repeatCount++;
-      }
-      analogWrite(fan_pin,fan_speed);
-      if(lower != -1 && upper != -1)
-        repeatCount=3;
-      client.stop();
-      Serial.println("Client disconnected");
-      Serial.println(" ");
     }
-    
+    sensors.requestTemperatures();//偵測溫度
+    Serial.println(sensors.getTempCByIndex(0));
+    if(set_temp[count]==40){
+      feel[1]=sensors.getTempCByIndex(0);
+      if(hot==0)
+        hot = sensors.getTempCByIndex(0);
+      Serial.println(String("hot goal:")+goal); 
+    }
+    else{
+      feel[0]=sensors.getTempCByIndex(0);
+      if(cold==0)
+        cold = sensors.getTempCByIndex(0);
+      Serial.println(String("cold goal:")+goal);
+    } 
+    count++;
+    set_temp[count++]=round(((sensors.getTempCByIndex(0)-rt)*10));
+    digitalWrite(ledPin, LOW);
+    analogWrite(fan_pin,fan_speed);
+    if(lower != -1 && upper != -1)
+        break;
   }
   for(int i=0;i<6;i+=2){
     Serial.println(set_temp[i]);
@@ -268,21 +452,26 @@ void loop() {
       break;
     set_table(set_temp[i],set_temp[i+1],q_table);
   }
-  show_table(q_table);
-  sensors.requestTemperatures();//偵測溫度
-  goal = sensors.getTempCByIndex(0);
-  Serial.println(String("temp goal:")+goal);
+
   if(upper != -1.0 && lower != -1.0){
+     goal=(feel[0]+feel[1])/2;
      fan_speed = (upper + lower)/2;
   }
   else if(upper != -1 && lower == -1){
+    goal=hot;
      fan_speed = upper;
   }
   else if(upper == -1 && lower != -1){
+    goal=hot;
      fan_speed = lower;
-  }                                                
+  }       
+  
+  Serial.println(String("temp goal:")+goal); 
+  //show_table(q_table);
+  //delay(100000);
+  send_chart(goal,fan_speed);                                        
   analogWrite(fan_pin,fan_speed);
-  //Serial.println(String("fan_speed:")+fan_speed);     //model 1 END
+  //model 1 END
            
   //model 2 START
   while(cnt < episode){                               //train 1000 times
@@ -291,54 +480,68 @@ void loop() {
       sensors.requestTemperatures();//偵測溫度
       before_tmp = sensors.getTempCByIndex(0);
       now_index = check_index(before_tmp,goal);
-      Serial.println(String("before tmp:")+before_tmp);
+      //Serial.println(String("before tmp:")+before_tmp);
       //Serial.println(String("now_index:")+now_index);
       if(random(0,100) < 5){        //5%random
         action_index = random(0,20);
             action = (action_index - 10) * 10;
+            //Serial.println(String("action index:")+action_index);
+            Serial.println(F("random!"));
       }
-      else{                         //use q table
+      else{
+        //use q table
+          //show_table(q_table);
           action_index = find_max_idx(now_index,q_table);
-          action = (action_index - 10) * 10;
+          action = (action_index - 10) *10;
+          //Serial.println(String("action index:")+action_index);
       }
-      Serial.println(String("action:")+action);
+      //Serial.println(String("action:")+action);
       //Serial.println(String("action_index:")+action_index);
       fan_speed += action;
+      if(fan_speed>255)
+        fan_speed=255;
+      else if(fan_speed<0)
+        fan_speed=0;
       analogWrite(fan_pin,fan_speed);
-      delay(500);
+      delay(2500);
       
       sensors.requestTemperatures();//偵測溫度
       after_tmp = sensors.getTempCByIndex(0);
-
+      send_chart(after_tmp,fan_speed);
       
       //reward or punish
       int next_index,reward;
-      Serial.println(String("After temp:")+after_tmp);
+      //Serial.println(String("After temp:")+after_tmp);
       //Serial.println(String("now_index:")+now_index);
       next_index = check_index(after_tmp,goal);
       if(after_tmp == goal){
-          reward = 10;
+          reward = 20;
       }
-      else if(round(after_tmp - before_tmp)==0){
-          reward = -10;
+      else if(round((after_tmp - before_tmp)*10==0)){
+          reward = -20;
       }
       else{
           reward = abs(round((after_tmp - before_tmp)*10));
       }  
-      
-      if(is_good(before_tmp,after_tmp)){  
-          q_table[now_index][action_index] = 10*((1-ALPHA)*q_table[now_index][action_index] + ALPHA*(reward + GAMMA*find_max_value(next_index,q_table)));
+      //Serial.println(String("reward:")+reward);
+      if(is_good(before_tmp,after_tmp)||round(after_tmp - before_tmp)*10==0){
+          //Serial.println("Good");  
+          //q_table[now_index][action_index] = round((1-ALPHA)*q_table[now_index][action_index]) + round(ALPHA*(reward + GAMMA*find_max_value(next_index,q_table)));
+          q_table[now_index][action_index] += round(ALPHA*(reward + round(GAMMA*find_max_value(next_index,q_table)) - q_table[now_index][action_index] ));
       }
       else{
           //Serial.println(String("now_index:")+now_index);
-          q_table[now_index][action_index] = 10*((1-ALPHA)*q_table[now_index][action_index] + ALPHA*(-reward + GAMMA*find_max_value(next_index,q_table)));
-          
+          //q_table[now_index][action_index] = round((1-ALPHA)*q_table[now_index][action_index]) + round(ALPHA*(-1*reward + GAMMA*find_max_value(next_index,q_table)));
+          q_table[now_index][action_index] += round(ALPHA*(-1*reward + round(GAMMA*find_max_value(next_index,q_table)) - q_table[now_index][action_index] ));
       }
       cnt++;
       //Serial.println(String("Q value:")+q_table[now_index][action_index]);
-      Serial.println(cnt);
-      //if(cnt%10==0)
+      //Serial.println(cnt);
+      
+      if(cnt%300==0){
         show_table(q_table);
+        update_table(q_table,target);
+      }
   }
   //model2 END
 }
